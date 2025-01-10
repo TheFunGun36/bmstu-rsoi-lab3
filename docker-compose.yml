@@ -1,5 +1,43 @@
-version: "3"
 services:
+  gateway:
+    build:
+      dockerfile: Dockerfile
+      context: svc-gateway
+    ports:
+      - "8080:8080"
+  reservation:
+    build:
+      dockerfile: Dockerfile
+      context: svc-reservation
+    ports:
+      - "8070:8070"
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@postgres/reservations"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  payment:
+    build:
+      dockerfile: Dockerfile
+      context: svc-payment
+    ports:
+      - "8060:8060"
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@postgres/payments"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  loyalty:
+    build:
+      dockerfile: Dockerfile
+      context: svc-loyalty
+    ports:
+      - "8050:8050"
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@postgres/loyalties"
+    depends_on:
+      postgres:
+        condition: service_healthy
   postgres:
     image: library/postgres:13
     container_name: postgres
@@ -7,7 +45,12 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "postgres"
-      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U program -d loyalties"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./postgres/:/docker-entrypoint-initdb.d/
