@@ -7,7 +7,10 @@ use axum::{
 use chrono::{Duration, NaiveTime, Utc};
 use uuid::Uuid;
 
-use crate::{dto::*, AppState, Message, RequestReturnValue, LOYALTY_ENDPOINT, PAYMENT_ENDPOINT, RESERVATION_ENDPOINT};
+use crate::{
+    dto::*, AppState, Message, RequestReturnValue, LOYALTY_ENDPOINT, PAYMENT_ENDPOINT,
+    RESERVATION_ENDPOINT,
+};
 
 #[utoipa::path(
     get,
@@ -97,7 +100,7 @@ pub async fn get_me(headers: HeaderMap) -> Result<impl IntoResponse, StatusCode>
         Ok(l) => LoyaltyInfoResponse::try_from_json(l).await,
     };
 
-    let reservations = reqwest::Client::new()
+    let reservations = client
         .get(format!("{RESERVATION_ENDPOINT}/api/v1/reservations"))
         .header("X-User-Name", username)
         .send()
@@ -237,12 +240,12 @@ pub async fn get_reservations(headers: HeaderMap) -> Result<impl IntoResponse, S
 pub async fn post_reservation(
     headers: HeaderMap,
     Json(req): Json<CreateReservationRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, impl IntoResponse> {
     let username = headers
         .get("X-User-Name")
-        .ok_or(StatusCode::BAD_REQUEST)?
+        .ok_or(StatusCode::BAD_REQUEST.into_response())?
         .to_str()
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?;
 
     let client = reqwest::Client::new();
     // 1) запросить отель
@@ -255,15 +258,19 @@ pub async fn post_reservation(
         .await
         .map_err(|e| {
             log::error!("Failed to issue request to reservation service: {e}");
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         })?
         .error_for_status()
-        .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))?
+        .map_err(|e| {
+            e.status()
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+                .into_response()
+        })?
         .json::<HotelResponse>()
         .await
         .map_err(|e| {
             log::error!("Failed to parse reservation service response: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })?;
 
     // 2) рассчитать по нему стоимость (end_date - start_date)
@@ -277,7 +284,7 @@ pub async fn post_reservation(
         .await
         .map_err(|e| {
             log::error!("Failed to issue request to loyalty service: {e}");
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         })?;
     let loyalty = match loyalty.status() {
         StatusCode::NOT_FOUND => LoyaltyInfoResponse {
@@ -285,10 +292,12 @@ pub async fn post_reservation(
             discount: 5,
             reservation_count: 1,
         },
-        StatusCode::OK => LoyaltyInfoResponse::from_json(loyalty).await?,
+        StatusCode::OK => LoyaltyInfoResponse::from_json(loyalty)
+            .await
+            .map_err(StatusCode::into_response)?,
         status => {
             log::error!("unexpected loyalty service response: {status}");
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
         }
     };
 
@@ -305,15 +314,19 @@ pub async fn post_reservation(
         .await
         .map_err(|e| {
             log::error!("Failed to issue request to payment service: {e}");
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         })?
         .error_for_status()
-        .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))?
+        .map_err(|e| {
+            e.status()
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+                .into_response()
+        })?
         .json::<PaymentInfoServiceResponse>()
         .await
         .map_err(|e| {
             log::error!("Failed to parse payment service response: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })?;
     log::debug!("Successfully created payment record");
 
@@ -325,11 +338,14 @@ pub async fn post_reservation(
         .await
         .map_err(|e| {
             log::error!("Failed to issue request to loyalty service: {e}");
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         })
         .and_then(|r| {
-            r.error_for_status()
-                .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+            r.error_for_status().map_err(|e| {
+                e.status()
+                    .map(StatusCode::into_response)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+            })
         });
     log::debug!("Successfully created loyalty record");
     match l {
@@ -357,15 +373,19 @@ pub async fn post_reservation(
                 .await
                 .map_err(|e| {
                     log::error!("Failed to issue request to reservation service: {e}");
-                    StatusCode::SERVICE_UNAVAILABLE
+                    (StatusCode::SERVICE_UNAVAILABLE,).into_response()
                 })?
                 .error_for_status()
-                .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))?
+                .map_err(|e| {
+                    e.status()
+                        .map(StatusCode::into_response)
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+                })?
                 .json::<PostReservationServiceResponse>()
                 .await
                 .map_err(|e| {
                     log::error!("Failed to parse reservation service response: {e}");
-                    StatusCode::INTERNAL_SERVER_ERROR
+                    (StatusCode::INTERNAL_SERVER_ERROR,).into_response()
                 })?;
             log::debug!("Successfully created reservation record");
 
@@ -383,8 +403,8 @@ pub async fn post_reservation(
             }))
         }
         // 7.1) Ошибка при обращении в loyalty сервис, откатываем payment
-        Err(e) => {
-            log::warn!("loyalty service unavailable ({e}), roll back payment");
+        Err(_) => {
+            log::warn!("loyalty service unavailable, roll back payment");
             client
                 .delete(format!(
                     "{}/api/v1/payment/{}",
@@ -394,17 +414,27 @@ pub async fn post_reservation(
                 .await
                 .map_err(|e| {
                     log::error!("Failed to issue request to payment service: {e}");
-                    StatusCode::SERVICE_UNAVAILABLE
+                    StatusCode::SERVICE_UNAVAILABLE.into_response()
                 })?
                 .error_for_status()
-                .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))?
+                .map_err(|e| {
+                    e.status()
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+                        .into_response()
+                })?
                 .json::<PaymentInfoServiceResponse>()
                 .await
                 .map_err(|e| {
                     log::error!("Failed to parse payment service response: {e}");
-                    StatusCode::INTERNAL_SERVER_ERROR
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
                 })?;
-            Err(StatusCode::SERVICE_UNAVAILABLE)
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    message: "Loyalty Service unavailable".to_owned(),
+                }),
+            )
+                .into_response())
         }
     }
 }
@@ -570,28 +600,25 @@ pub async fn delete_reservation(
     if let Err(e) = loyalty_resp {
         log::debug!("Loyalty service unavailable ({e}), request is being put into send queue");
         let username = username.to_owned();
-        let resend_lambda = Box::new(
-            move || -> RequestReturnValue {
-                let username = username.clone();
-                Box::pin(async move {
-                    reqwest::Client::new()
-                        .delete(format!("{}/api/v1/loyalty", LOYALTY_ENDPOINT))
-                        .header("X-User-Name", username)
-                        .send()
-                        .await
-                        .map_err(|e| {
-                            log::error!("Failed to issue request to loyalty service: {e}");
-                            StatusCode::SERVICE_UNAVAILABLE
-                        })
-                        .and_then(|s| {
-                            s.error_for_status().map_err(|e| {
-                                e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-                            })
-                        })
-                        .map(|_| ())
-                })
-            },
-        );
+        let resend_lambda = Box::new(move || -> RequestReturnValue {
+            let username = username.clone();
+            Box::pin(async move {
+                reqwest::Client::new()
+                    .delete(format!("{}/api/v1/loyalty", LOYALTY_ENDPOINT))
+                    .header("X-User-Name", username)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        log::error!("Failed to issue request to loyalty service: {e}");
+                        StatusCode::SERVICE_UNAVAILABLE
+                    })
+                    .and_then(|s| {
+                        s.error_for_status()
+                            .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+                    })
+                    .map(|_| ())
+            })
+        });
         state
             .msg_chan
             .send(Message {
@@ -615,12 +642,12 @@ pub async fn delete_reservation(
         ("X-User-Name", Header, description="Имя пользователя, для которого будет заведена бронь")
     ),
 )]
-pub async fn get_loyalty(headers: HeaderMap) -> Result<impl IntoResponse, StatusCode> {
+pub async fn get_loyalty(headers: HeaderMap) -> Result<impl IntoResponse, impl IntoResponse> {
     let username = headers
         .get("X-User-Name")
-        .ok_or(StatusCode::BAD_REQUEST)?
+        .ok_or(ErrorResponse::resp_from_status(StatusCode::BAD_REQUEST))?
         .to_str()
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| ErrorResponse::resp_from_status(StatusCode::BAD_REQUEST))?;
 
     let resp = reqwest::Client::new()
         .get(format!("{LOYALTY_ENDPOINT}/api/v1/loyalty"))
@@ -629,16 +656,23 @@ pub async fn get_loyalty(headers: HeaderMap) -> Result<impl IntoResponse, Status
         .await
         .map_err(|e| {
             log::error!("Failed to issue request to reservation service: {e}");
-            StatusCode::SERVICE_UNAVAILABLE
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    message: "Loyalty Service unavailable".to_owned(),
+                }),
+            )
         })?
         .error_for_status()
-        .map_err(|e| e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))?
+        .map_err(|e| {
+            ErrorResponse::resp_from_status(e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+        })?
         .json::<LoyaltyInfoResponse>()
         .await
         .map_err(|e| {
             log::error!("Failed to parse reservation service response: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            ErrorResponse::resp_from_status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
-    Ok((StatusCode::OK, Json(resp)))
+    Ok::<_, (StatusCode, Json<ErrorResponse>)>(Json(resp))
 }

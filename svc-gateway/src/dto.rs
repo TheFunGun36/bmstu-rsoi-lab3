@@ -27,6 +27,22 @@ where
     }
 }
 
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct ErrorResponse {
+    pub message: String,
+}
+
+impl ErrorResponse {
+    pub fn resp_from_status(s: StatusCode) -> (StatusCode, axum::Json<ErrorResponse>) {
+        (
+            s,
+            axum::Json(ErrorResponse {
+                message: s.to_string(),
+            }),
+        )
+    }
+}
+
 impl FromJson for PaymentInfo {}
 impl FromJson for LoyaltyInfoResponse {}
 
@@ -174,6 +190,16 @@ pub struct LoyaltyInfoResponse {
     pub status: LoyaltyStatus,
     pub discount: i32,
     pub reservation_count: i32,
+}
+
+impl Default for LoyaltyInfoResponse {
+    fn default() -> Self {
+        Self {
+            status: LoyaltyStatus::Bronze,
+            discount: 5,
+            reservation_count: 0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
