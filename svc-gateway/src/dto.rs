@@ -86,8 +86,7 @@ pub struct HotelInfo {
 #[derive(Serialize, ToSchema)]
 pub struct UserInfoResponse {
     pub reservations: Vec<ReservationResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub loyalty: Option<LoyaltyInfoResponse>,
+    pub loyalty: LoyaltyInfoResponse,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -187,17 +186,27 @@ pub struct PostReservationServiceResponse {
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoyaltyInfoResponse {
-    pub status: LoyaltyStatus,
-    pub discount: i32,
-    pub reservation_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<LoyaltyStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discount: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reservation_count: Option<i32>,
 }
 
-impl Default for LoyaltyInfoResponse {
-    fn default() -> Self {
-        Self {
-            status: LoyaltyStatus::Bronze,
-            discount: 5,
-            reservation_count: 0,
+impl LoyaltyInfoResponse {
+    pub fn from_opt(s: Option<Self>) -> Self {
+        match s {
+            Some(s) => Self {
+                status: s.status,
+                discount: s.discount,
+                reservation_count: s.reservation_count,
+            },
+            None => Self {
+                status: None,
+                discount: None,
+                reservation_count: None,
+            },
         }
     }
 }

@@ -146,7 +146,7 @@ pub async fn get_me(headers: HeaderMap) -> Result<impl IntoResponse, StatusCode>
         StatusCode::OK,
         Json(UserInfoResponse {
             reservations,
-            loyalty,
+            loyalty: LoyaltyInfoResponse::from_opt(loyalty),
         }),
     ))
 }
@@ -294,9 +294,9 @@ pub async fn post_reservation(
         })?;
     let loyalty = match loyalty.status() {
         StatusCode::NOT_FOUND => LoyaltyInfoResponse {
-            status: LoyaltyStatus::Bronze,
-            discount: 5,
-            reservation_count: 1,
+            status: Some(LoyaltyStatus::Bronze),
+            discount: Some(5),
+            reservation_count: Some(1),
         },
         StatusCode::OK => LoyaltyInfoResponse::from_json(loyalty)
             .await
@@ -307,7 +307,7 @@ pub async fn post_reservation(
         }
     };
 
-    let cost = cost - (cost * loyalty.discount / 100);
+    let cost = cost - (cost * loyalty.discount.unwrap() / 100);
 
     // 4) запись в payment
     let payment = client
@@ -400,7 +400,7 @@ pub async fn post_reservation(
                 hotel_uid: reservation.hotel_uid,
                 start_date: reservation.start_date.naive_utc().date(),
                 end_date: reservation.end_date.naive_utc().date(),
-                discount: loyalty.discount,
+                discount: loyalty.discount.unwrap(),
                 status: reservation.status,
                 payment: PaymentInfo {
                     status: payment.status,
