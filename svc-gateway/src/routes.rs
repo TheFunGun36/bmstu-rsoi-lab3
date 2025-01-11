@@ -284,7 +284,13 @@ pub async fn post_reservation(
         .await
         .map_err(|e| {
             log::error!("Failed to issue request to loyalty service: {e}");
-            StatusCode::SERVICE_UNAVAILABLE.into_response()
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorResponse {
+                    message: "Loyalty Service unavailable".to_owned(),
+                },
+            )
+                .into_response()
         })?;
     let loyalty = match loyalty.status() {
         StatusCode::NOT_FOUND => LoyaltyInfoResponse {
