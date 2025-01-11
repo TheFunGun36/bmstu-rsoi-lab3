@@ -1,9 +1,34 @@
 use std::fmt::Display;
 
+use axum::http::StatusCode;
 use chrono::{DateTime, NaiveDate};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+pub trait FromJson
+where
+    for<'a> Self: Deserialize<'a>,
+{
+    async fn try_from_json(r: reqwest::Response) -> Option<Self> {
+        match r.json::<Self>().await {
+            Err(e) => {
+                log::warn!("Failed to parse service response: {e}");
+                None
+            }
+            Ok(l) => Some(l),
+        }
+    }
+    async fn from_json(r: reqwest::Response) -> Result<Self, StatusCode> {
+        r.json::<Self>().await.map_err(|e| {
+            log::error!("Failed to parse service response: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+    }
+}
+
+impl FromJson for PaymentInfo {}
+impl FromJson for LoyaltyInfoResponse {}
 
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +70,8 @@ pub struct HotelInfo {
 #[derive(Serialize, ToSchema)]
 pub struct UserInfoResponse {
     pub reservations: Vec<ReservationResponse>,
-    pub loyalty: LoyaltyInfoResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loyalty: Option<LoyaltyInfoResponse>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -56,11 +82,15 @@ pub struct ReservationResponse {
     start_date: NaiveDate,
     end_date: NaiveDate,
     status: PaymentStatus,
-    payment: PaymentInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payment: Option<PaymentInfo>,
 }
 
 impl ReservationResponse {
-    pub fn from_svc_responses(res: ReservationServiceResponse, payment: PaymentInfo) -> Self {
+    pub fn from_svc_responses(
+        res: ReservationServiceResponse,
+        payment: Option<PaymentInfo>,
+    ) -> Self {
         Self {
             reservation_uid: res.reservation_uid,
             hotel: res.hotel,
