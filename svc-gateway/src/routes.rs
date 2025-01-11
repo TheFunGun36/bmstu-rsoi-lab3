@@ -286,9 +286,9 @@ pub async fn post_reservation(
             log::error!("Failed to issue request to loyalty service: {e}");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                ErrorResponse {
+                Json(ErrorResponse {
                     message: "Loyalty Service unavailable".to_owned(),
-                },
+                }),
             )
                 .into_response()
         })?;
